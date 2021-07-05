@@ -2,7 +2,7 @@ FROM golang:alpine AS build
 RUN mkdir /build 
 ADD . /build/
 WORKDIR /build 
-RUN go build -o bouncer ./cmd/alertmanager_bouncer
+RUN apk add git && go build -o bouncer ./cmd/alertmanager_bouncer
 
 FROM alpine
 COPY --from=build /build/bouncer /bouncer/bouncer

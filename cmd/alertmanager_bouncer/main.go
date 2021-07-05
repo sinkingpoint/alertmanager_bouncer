@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sinkingpoint/alertmanager_bouncer/lib/bouncer"
+	johari "github.com/sinkingpoint/johari-go/lib"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -46,6 +47,12 @@ func loadBouncersFromFile(conf config) ([]bouncer.Bouncer, error) {
 
 func main() {
 	config := config{}
+	johari.InitTracing(johari.JohariConfig{
+		ServiceName:  "alertmanager-bouncer",
+		CollectorURL: "http://jaeger:14268/api/traces",
+		SamplingRate: 1,
+	})
+
 	app := kingpin.New("alertmanager_bouncer", "A Business Logic Reverse Proxy for Alertmanager")
 	app.Flag("backend.addr", "The URL of the backend to upstream to").Required().URLVar(&config.backendURL)
 	app.Flag("listen.addr", "The URL for the reverse proxy to listen on").Required().TCPVar(&config.listenURL)
@@ -71,7 +78,7 @@ func main() {
 	server := http.Server{
 		ReadTimeout:  config.serverReadTimeout,
 		WriteTimeout: config.serverWriteTimeout,
-		Handler:      proxy,
+		Handler:      johari.NewHTTPServerWrapper(proxy),
 		Addr:         config.listenURL.String(),
 	}
 

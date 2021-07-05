@@ -17,3 +17,7 @@ services:
     command: "--web.listen-address alertmanager-2:9091 --config.file /etc/alertmanager/alertmanager.yml"
     ports:
       - 9091:9091
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - 16686:16686

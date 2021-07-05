@@ -2,6 +2,7 @@ package bouncer
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 
+	johari "github.com/sinkingpoint/johari-go/lib"
+	"go.opentelemetry.io/otel/attribute"
 	"gopkg.in/yaml.v2"
 )
 
@@ -108,7 +111,7 @@ func (h *HTTPError) ToResponse() *http.Response {
 
 // Decider is a function which takes an HTTP request and optionally returns
 // an HTTPError, if the given request should be rejected
-type Decider func(req *http.Request) *HTTPError
+type Decider func(req *http.Request, context context.Context) *HTTPError
 
 // Bouncer is a coupling of a Target, and a number of deciders. It can optionally
 // "Bounce" a request, i.e. reject it based on a series of Deciders
@@ -125,6 +128,13 @@ func (b Bouncer) Bounce(req *http.Request) *HTTPError {
 		return nil
 	}
 
+	bctx, bspan := johari.NewChildSpan(req.Context(), "bouncer")
+	defer bspan.End()
+
+	bspan.SetAttributes(attribute.String("target_method", b.Target.Method))
+	bspan.SetAttributes(attribute.String("target_regex", b.Target.URIRegex.String()))
+	bspan.SetAttributes(attribute.Bool("dry_run", b.DryRun))
+
 	// We want multiple deciders to be able to read the body, so
 	// we have to read it here, and then reload it into a buffer for every decider
 	var rawBody []byte
@@ -135,6 +145,7 @@ func (b Bouncer) Bounce(req *http.Request) *HTTPError {
 		defer req.Body.Close()
 		rawBody, err = ioutil.ReadAll(req.Body)
 		if err != nil {
+			bspan.RecordError(err)
 			return &HTTPError{
 				Status: 500,
 				Err:    fmt.Errorf("Failed to read body from request"),
@@ -143,16 +154,21 @@ func (b Bouncer) Bounce(req *http.Request) *HTTPError {
 	}
 
 	for _, decider := range b.Deciders {
+		dctx, dspan := johari.NewChildSpan(bctx, "decider")
+		defer dspan.End()
 		req.Body = ioutil.NopCloser(bytes.NewBuffer(rawBody))
 		defer req.Body.Close()
-		err := decider(req)
+		err := decider(req, dctx)
 		if err != nil {
 			if b.DryRun {
 				log.Printf("Would have rejected %s %s: %s\n", req.Method, req.URL.RequestURI(), err.Err.Error())
 			} else {
 				log.Printf("Rejected %s %s: %s\n", req.Method, req.URL.RequestURI(), err.Err.Error())
+				dspan.AddEvent("decider.rejected")
 				return err
 			}
+		} else {
+			dspan.AddEvent("decider.accepted")
 		}
 	}
 

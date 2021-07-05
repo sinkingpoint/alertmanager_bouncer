@@ -1,6 +1,7 @@
 package bouncer
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	johari "github.com/sinkingpoint/johari-go/lib"
 )
 
 type deciderTemplate struct {
@@ -109,7 +112,7 @@ func parseAlertmanagerSilence(body io.ReadCloser) (AlertmanagerSilence, error) {
 // AllSilencesHaveAuthorDecider returns a decider that rejects requests that
 // do not have authors which end in the given domain string
 func AllSilencesHaveAuthorDecider(config map[string]string) Decider {
-	return func(req *http.Request) *HTTPError {
+	return func(req *http.Request, context context.Context) *HTTPError {
 		domain := config["domain"]
 		silence, err := parseAlertmanagerSilence(req.Body)
 		if err != nil {
@@ -135,9 +138,10 @@ func AllSilencesHaveAuthorDecider(config map[string]string) Decider {
 // alertmanagers which receive everything a production one does
 func MirrorDecider(config map[string]string) Decider {
 	destination := config["destination"]
-	return func(req *http.Request) *HTTPError {
+	return func(req *http.Request, context context.Context) *HTTPError {
 		url := destination + req.RequestURI
-		request, err := http.NewRequest(
+		request, err := johari.NewChildRequest(
+			context,
 			req.Method,
 			url,
 			req.Body,
@@ -158,7 +162,7 @@ func MirrorDecider(config map[string]string) Decider {
 
 		log.Printf("Mirroring request to %s\n", destination)
 
-		http.DefaultClient.Do(request)
+		johari.NewHTTPClientWrapper(http.DefaultClient).Do(request)
 		return nil
 	}
 }
@@ -166,7 +170,7 @@ func MirrorDecider(config map[string]string) Decider {
 // SilencesDontExpireOnWeekendsDecider returns a Decider which rejects silences
 // that expire on weekends, so that we don't spring any surprises on someone oncall over the weekend
 func SilencesDontExpireOnWeekendsDecider(config map[string]string) Decider {
-	return func(req *http.Request) *HTTPError {
+	return func(req *http.Request, context context.Context) *HTTPError {
 		silence, err := parseAlertmanagerSilence(req.Body)
 		if err != nil {
 			return &HTTPError{
@@ -210,7 +214,7 @@ func LongSilencesHaveTicketDecider(config map[string]string) Decider {
 		return nil
 	}
 
-	return func(req *http.Request) *HTTPError {
+	return func(req *http.Request, context context.Context) *HTTPError {
 		silence, err := parseAlertmanagerSilence(req.Body)
 		if err != nil {
 			return &HTTPError{
